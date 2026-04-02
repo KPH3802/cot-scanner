@@ -208,21 +208,20 @@ def get_latest_report_date(conn):
     return row[0] if row and row[0] else None
 
 def update_cot_db(conn, backfill=False):
-    """Fetch latest year's data from CFTC and update DB."""
     year = datetime.utcnow().year
-    print(f'Fetching CFTC COT data for {year}...')
+    if backfill:
+        print("BACKFILL: fetching 2015-" + str(year) + "...")
+        for y in range(2015, year + 1):
+            rows = fetch_cftc_year(y)
+            if rows:
+                n = store_cot_rows(conn, rows)
+                print(str(y) + ": " + str(n) + " records")
+            time.sleep(1)
+        return
     rows = fetch_cftc_year(year)
     if rows:
-        new = store_cot_rows(conn, rows)
-        print(f'  Stored {new} new records for {year}')
-    # Also fetch prior year if we're in Q1 (data can be sparse in Jan)
-    if datetime.utcnow().month <= 3:
-        prior = year - 1
-        print(f'Q1 detected -- also fetching {prior}...')
-        rows_prior = fetch_cftc_year(prior)
-        if rows_prior:
-            new2 = store_cot_rows(conn, rows_prior)
-            print(f'  Stored {new2} new records for {prior}')
+        n = store_cot_rows(conn, rows)
+        print("Stored " + str(n) + " new COT records")
 
 # ============================================================
 # SIGNAL LOGIC
