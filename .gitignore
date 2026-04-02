@@ -1,0 +1,7 @@
+config.py
+cot_scanner.db
+*.db
+*.csv
+__pycache__/
+*.pyc
+.DS_Store
