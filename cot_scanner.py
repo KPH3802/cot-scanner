@@ -60,6 +60,24 @@ for name, cfg in config.COMMODITIES.items():
     for code in cfg['codes']:
         CONTRACT_CODES[code] = name
 
+# ---------------------------------------------------------------------------
+# Signal Intelligence — live logging
+# ---------------------------------------------------------------------------
+def log_signal_intelligence(scan_date, scanner, ticker, direction, fired,
+                             signal_strength=None, signal_bucket=None,
+                             regime_filter_passed=None, regime_value=None,
+                             score=None):
+    try:
+        import sqlite3 as _sl
+        db = os.path.expanduser('~/signal_intelligence.db')
+        c = _sl.connect(db)
+        c.execute('CREATE TABLE IF NOT EXISTS signal_log (id INTEGER PRIMARY KEY AUTOINCREMENT, scan_date TEXT, scanner TEXT, ticker TEXT, direction TEXT, fired INTEGER, signal_strength REAL, signal_bucket TEXT, regime_filter_passed INTEGER, regime_value REAL, score INTEGER, autotrader_acted INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+        c.execute('INSERT INTO signal_log (scan_date,scanner,ticker,direction,fired,signal_strength,signal_bucket,regime_filter_passed,regime_value,score) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                  (scan_date,scanner,ticker,direction,fired,signal_strength,signal_bucket,regime_filter_passed,regime_value,score))
+        c.commit(); c.close()
+    except Exception:
+        pass
+
 # ============================================================
 # DATABASE
 # ============================================================
@@ -323,20 +341,44 @@ def detect_signals(conn, report_date):
             else:
                 signal_direction = 'BEAR'
 
+        # Percentile bucket for logging
+        if pct >= 95:
+            _pct_bucket = '95+'
+        elif pct >= 90:
+            _pct_bucket = '90-95'
+        elif pct >= 80:
+            _pct_bucket = '80-90'
+        elif pct <= 5:
+            _pct_bucket = '0-5'
+        elif pct <= 10:
+            _pct_bucket = '5-10'
+        elif pct <= 20:
+            _pct_bucket = '10-20'
+        else:
+            _pct_bucket = '20-80'
+
         if signal_direction is None:
             print(f'  {commodity}: pct={pct:.1f}% -- no signal')
+            log_signal_intelligence(report_date, 'COT_NONE', etf, 'NONE', 0,
+                                    signal_strength=pct, signal_bucket=_pct_bucket)
             continue
 
         # PATH B SAFETY: Gold BULL at 95th+ percentile mean-reverts (p=0.063, inverse gradient)
         # Overextended commercial longs in gold = exhaustion, not momentum. Suppress.
         if commodity == 'Gold' and signal_direction == 'BULL' and pct >= 95:
             print(f'  {commodity}: pct={pct:.1f}% BULL -> SUPPRESSED (95th+ inverse gradient, Path B Apr 2026)')
+            log_signal_intelligence(report_date, 'COT_BULL', etf, 'BUY', 0,
+                                    signal_strength=pct, signal_bucket=_pct_bucket)
             continue
 
         # PATH B SAFETY: Corn at 95th+ non-monotonic -- 90-95th is sweet spot, 95th+ collapses
         # Corn BULL p=0.002*** at 90-95th but negative at 95th+. Suppress extremes.
         if commodity == 'Corn' and pct >= 95:
             print(f'  {commodity}: pct={pct:.1f}% {signal_direction} -> SUPPRESSED (95th+ collapse, Path B Apr 2026)')
+            _sc = 'COT_BULL' if signal_direction == 'BULL' else 'COT_BEAR'
+            _d = 'BUY' if signal_direction == 'BULL' else 'SHORT'
+            log_signal_intelligence(report_date, _sc, etf, _d, 0,
+                                    signal_strength=pct, signal_bucket=_pct_bucket)
             continue
 
         # Assign vehicle and hold weeks
@@ -398,6 +440,24 @@ def detect_signals(conn, report_date):
         status = 'SIGNAL' if regime_ok else 'BLOCKED'
         score_str = f' Score={score}' if score != 3 else ''
         print(f'  {commodity}: pct={pct:.1f}% {signal_direction} -> {vehicle} {ib_dir} [{status}]{score_str} {regime_note}')
+
+        # Determine regime_value for logging
+        _regime_val = None
+        if commodity == 'WTI Crude Oil':
+            _regime_val = regime.get('OVX')
+        elif commodity == 'Gold':
+            _regime_val = regime.get('GVZ')
+        elif commodity == 'Wheat (SRW)':
+            _regime_val = regime.get('WEAT_RVOL')
+        elif commodity == 'Corn':
+            _regime_val = regime.get('CORN_RVOL')
+        _scanner = 'COT_BULL' if signal_direction == 'BULL' else 'COT_BEAR'
+        log_signal_intelligence(report_date, _scanner, vehicle, ib_dir,
+                                1 if regime_ok else 0,
+                                signal_strength=pct, signal_bucket=_pct_bucket,
+                                regime_filter_passed=1 if regime_ok else 0,
+                                regime_value=_regime_val,
+                                score=score if regime_ok else None)
 
         signals.append({
             'report_date':    report_date,
