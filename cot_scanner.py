@@ -357,8 +357,8 @@ def detect_signals(conn, report_date):
         elif commodity == 'Wheat (SRW)':
             if signal_direction == 'BULL':
                 vehicle, hold_weeks, ib_dir = 'WEAT', 8, 'BUY'
-            else:
-                continue
+            else:  # BEAR -- Path B validated, 95th+ gradient p=0.003***
+                vehicle, hold_weeks, ib_dir = 'WEAT', 8, 'SHORT'
         elif commodity == 'Corn':
             if signal_direction == 'BULL':
                 vehicle, hold_weeks, ib_dir = 'CORN', 13, 'BUY'
@@ -387,8 +387,17 @@ def detect_signals(conn, report_date):
                 regime_ok   = False
                 regime_note = f'CORN_RVOL={regime["CORN_RVOL"]:.3f} > {config.CORN_RVOL_MAX} (high vol, skip)'
 
+        # Scoring: Wheat BEAR has validated percentile gradient (Path B Apr 2026)
+        # BEAR percentile is low (<=20), so lower = more extreme = higher score
+        score = 3  # default for all signals
+        if commodity == 'Wheat (SRW)' and signal_direction == 'BEAR':
+            if pct <= 5:     score = 5  # 95th+ equivalent (extreme short)
+            elif pct <= 10:  score = 4  # 90-95th equivalent
+            else:            score = 3  # 80-90th baseline
+
         status = 'SIGNAL' if regime_ok else 'BLOCKED'
-        print(f'  {commodity}: pct={pct:.1f}% {signal_direction} -> {vehicle} {ib_dir} [{status}] {regime_note}')
+        score_str = f' Score={score}' if score != 3 else ''
+        print(f'  {commodity}: pct={pct:.1f}% {signal_direction} -> {vehicle} {ib_dir} [{status}]{score_str} {regime_note}')
 
         signals.append({
             'report_date':    report_date,
@@ -401,6 +410,7 @@ def detect_signals(conn, report_date):
             'net_commercial': latest_net,
             'regime_ok':      regime_ok,
             'regime_note':    regime_note,
+            'score':          score,
         })
 
     return signals
@@ -447,12 +457,19 @@ def store_signal(conn, sig):
 DIRECTION_COLOR = {'BULL': '#00c853', 'BEAR': '#f44336'}
 HOLD_MAP = {8: '8 weeks', 13: '13 weeks', 26: '26 weeks'}
 
+def _vehicle_with_score(s):
+    """Return 'TICKER' or 'TICKER(N)' if score != 3."""
+    if s.get('score', 3) != 3:
+        return f'{s["vehicle"]}({s["score"]})'
+    return s['vehicle']
+
 def build_email_subject(tradeable):
     """Build subject parseable by IB AutoTrader.
-    Format: 'COT BULL: XOP, GLD | COT BEAR: USO'
+    Format: 'COT BULL: XOP, GLD | COT BEAR: USO, WEAT(5)'
+    Score suffix only appears when score != 3 (default).
     """
-    bulls = [s['vehicle'] for s in tradeable if s['ib_direction'] == 'BUY']
-    bears = [s['vehicle'] for s in tradeable if s['ib_direction'] == 'SHORT']
+    bulls = [_vehicle_with_score(s) for s in tradeable if s['ib_direction'] == 'BUY']
+    bears = [_vehicle_with_score(s) for s in tradeable if s['ib_direction'] == 'SHORT']
     parts = []
     if bulls: parts.append(f'COT BULL: {chr(44).join(bulls)}')
     if bears: parts.append(f'COT BEAR: {chr(44).join(bears)}')
