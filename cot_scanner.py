@@ -278,6 +278,11 @@ def detect_signals(conn, report_date):
     For each commodity, compute rolling percentile and check regime filters.
     Returns list of signal dicts.
     """
+    # PATH B SCORING RULES (derived Apr 10 2026 backtest):
+    # Gold BULL:  suppress at 95th+ (inverse gradient -- overextended = mean revert)
+    # Corn:       suppress at 95th+ (non-monotonic -- sweet spot is 80-95th)
+    # Wheat BEAR: gradient confirmed at 95th+ (p=0.003) -- deploy scoring when Wheat BEAR vehicle added
+    # All others: flat Score 3 (no gradient detected)
     signals = []
     regime  = get_regime_vars()
     print(f'  Regime: OVX={regime["OVX"]}, GVZ={regime["GVZ"]}, '
@@ -320,6 +325,18 @@ def detect_signals(conn, report_date):
 
         if signal_direction is None:
             print(f'  {commodity}: pct={pct:.1f}% -- no signal')
+            continue
+
+        # PATH B SAFETY: Gold BULL at 95th+ percentile mean-reverts (p=0.063, inverse gradient)
+        # Overextended commercial longs in gold = exhaustion, not momentum. Suppress.
+        if commodity == 'Gold' and signal_direction == 'BULL' and pct >= 95:
+            print(f'  {commodity}: pct={pct:.1f}% BULL -> SUPPRESSED (95th+ inverse gradient, Path B Apr 2026)')
+            continue
+
+        # PATH B SAFETY: Corn at 95th+ non-monotonic -- 90-95th is sweet spot, 95th+ collapses
+        # Corn BULL p=0.002*** at 90-95th but negative at 95th+. Suppress extremes.
+        if commodity == 'Corn' and pct >= 95:
+            print(f'  {commodity}: pct={pct:.1f}% {signal_direction} -> SUPPRESSED (95th+ collapse, Path B Apr 2026)')
             continue
 
         # Assign vehicle and hold weeks
