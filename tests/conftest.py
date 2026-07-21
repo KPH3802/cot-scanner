@@ -9,12 +9,19 @@ hits yfinance/network. To run detect_signals fully offline we:
 
 No real config.py is created; nothing here contains a real credential.
 """
+import os
 import sys
 import types
 import sqlite3
 import importlib
 
 import pytest
+
+# Ensure the repo root (where cot_scanner.py lives) is importable regardless of
+# how pytest is invoked (`pytest tests/` as well as `python -m pytest`).
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 
 def _make_config():
