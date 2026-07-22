@@ -1,0 +1,15 @@
+#!/bin/bash
+# gmc-managed-hook — gitleaks staged-secret scan (round-6 G6): free push-protection
+# replacement for private repos. Blocks a commit whose staged changes contain a
+# detectable secret. Fail-OPEN on missing gitleaks, fail-CLOSED on a finding.
+# Activate on a fresh clone:  git config core.hooksPath .githooks
+set -uo pipefail
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "[pre-commit] gitleaks not installed — secret scan SKIPPED (brew install gitleaks)" >&2
+  exit 0
+fi
+if ! gitleaks git --staged --redact --no-banner; then
+  echo "[pre-commit] BLOCKED: gitleaks found a secret in staged changes. Remove it and re-commit." >&2
+  exit 1
+fi
+exit 0
