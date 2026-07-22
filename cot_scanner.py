@@ -214,7 +214,7 @@ def store_cot_rows(conn, rows):
             if c.rowcount > 0:
                 new += 1
         except Exception as e:
-            pass
+            print(f"[COT_STORE_FAIL] {commodity} {code}: {type(e).__name__}: {e}", flush=True)
     conn.commit()
     return new
 
@@ -663,6 +663,25 @@ def log_scan(conn, report_date, signals, emailed, errors=''):
               (datetime.utcnow().strftime('%Y-%m-%d %H:%M'), report_date, signals, 1 if emailed else 0, errors))
     conn.commit()
 
+
+def log_scan_run(scanner, source_status, n_evaluated, n_fired=0, note='', db_path=None):
+    """One row per scanner run -> shared ~/signal_intelligence.db scan_runs table.
+
+    A run that fetched nothing, or is a no-op (week already processed), is otherwise
+    indistinguishable from a scanner that never ran: the per-signal log loop is skipped
+    when there's no data, so without this heartbeat the scanner looks dead in the
+    cross-scanner monitor. Loud on failure, never raises."""
+    try:
+        import sqlite3 as _sl
+        db = db_path or os.path.expanduser('~/signal_intelligence.db')
+        c = _sl.connect(db)
+        c.execute('CREATE TABLE IF NOT EXISTS scan_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, ran_at TEXT DEFAULT CURRENT_TIMESTAMP, scanner TEXT, source_status TEXT, n_evaluated INTEGER, n_fired INTEGER, note TEXT)')
+        c.execute('INSERT INTO scan_runs (scanner, source_status, n_evaluated, n_fired, note) VALUES (?,?,?,?,?)',
+                  (scanner, source_status, n_evaluated, n_fired, note))
+        c.commit(); c.close()
+    except Exception as _sr_err:
+        print(f"[SCAN_RUN_FAIL] {scanner}: {type(_sr_err).__name__}: {_sr_err}", flush=True)
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -681,6 +700,7 @@ def run_scan(force=False, dry_run=False, backfill=False):
     report_date = get_latest_report_date(conn)
     if not report_date:
         print('ERROR: No COT data in DB after update')
+        log_scan_run('COT', 'FETCH_FAIL', 0, 0, note='no report_date after CFTC update')
         conn.close()
         return
     print(f'Latest report date in DB: {report_date}')
@@ -688,6 +708,7 @@ def run_scan(force=False, dry_run=False, backfill=False):
     # Step 3: Check if already processed
     if not force and is_week_processed(conn, report_date):
         print(f'Week {report_date} already processed.')
+        log_scan_run('COT', 'ALREADY_PROCESSED', 0, 0, note=report_date)
         conn.close()
         return
 
@@ -722,6 +743,7 @@ def run_scan(force=False, dry_run=False, backfill=False):
 
     mark_week_processed(conn, report_date, len(all_signals))
     log_scan(conn, report_date, len(all_signals), email_sent)
+    log_scan_run('COT', 'OK', len(all_signals), len(tradeable), note=report_date)
 
     print(f"{'='*60}")
     print(f'COMPLETE: {len(tradeable)} tradeable, {len(blocked)} blocked')
