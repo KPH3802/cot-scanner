@@ -664,6 +664,53 @@ def log_scan(conn, report_date, signals, emailed, errors=''):
     conn.commit()
 
 
+# Sentinel "vehicle" marking a RUN record (item 2c, JOB-20260727-MONDAY). The real
+# vehicles are XOP/USO/GLD/WEAT/CORN; this deliberately is not a ticker shape so no
+# consumer can mistake a liveness row for a position.
+RUN_SENTINEL_VEHICLE = '__RUN__'
+
+# The two scanner names the Studio's pa_watch actually watches. `COT_NONE` (the
+# no-signal path at :362) is a THIRD name pa_watch tracks as its own component, and
+# it has never written a row to the synced DB; `log_scan_run` below files under
+# plain `COT` and lands in a `scan_runs` table that does not sync at all.
+DIRECTIONAL_SCANNERS = ('COT_BULL', 'COT_BEAR')
+
+
+def log_directional_scan_runs(report_date):
+    """Record that BOTH directions ran for ``report_date`` — fired or not.
+
+    **The defect this closes is visibility, not signal logic.** The 07-20
+    investigation (`tests/test_bull_reachability.py`) already proved BULL is
+    reachable at the 80th/90th percentile for all four commodities, that the only
+    BULL suppression is the documented Path-B 95th+ rule for Gold and Corn, and that
+    the two threshold gates are mirror images. Nothing systematically suppresses
+    BULL signals.
+
+    What was missing is that `COT_BULL` earned a `signal_log` row ONLY when a bull
+    actually fired (:455) or hit a Path-B suppression (:370, :380). In an ordinary
+    week with no commodity at a bull extreme, nothing was written under that name at
+    all — so `MAX(scan_date)`, the only thing `ops/obs/pa_watch.py:111` reads,
+    froze at the last bull that fired. Measured on the Studio 2026-07-27:
+    COT_BULL 2026-01-06 (174 rows, all fired=1) vs COT_BEAR 2026-07-21.
+
+    **Why both directions and not just the bull side.** COT_BEAR's freshness was
+    ACCIDENTAL: Wheat sat at a bear extreme nearly every week (clean 7-day gaps
+    07-21, -14, -07, 06-30, 06-23). The moment Wheat stops, COT_BEAR goes stale in
+    exactly the same way. Advancing only the bull side would leave the identical
+    trap armed on the other one, so the records are symmetric by construction.
+
+    **A6.** A falsy ``report_date`` writes nothing: `run_scan`'s FETCH_FAIL branch
+    has no COT data at all, and a liveness record there would mark the scanner alive
+    precisely when its input pipeline is broken. Write failures ride the existing
+    ``[SIGNAL_LOG_FAIL]`` contract — surfaced, never swallowed.
+    """
+    if not report_date:
+        return
+    for name in DIRECTIONAL_SCANNERS:
+        log_signal_intelligence(report_date, name, RUN_SENTINEL_VEHICLE, 'NONE', 0,
+                                signal_bucket='RUN')
+
+
 def log_scan_run(scanner, source_status, n_evaluated, n_fired=0, note='', db_path=None):
     """One row per scanner run -> shared ~/signal_intelligence.db scan_runs table.
 
@@ -744,6 +791,11 @@ def run_scan(force=False, dry_run=False, backfill=False):
     mark_week_processed(conn, report_date, len(all_signals))
     log_scan(conn, report_date, len(all_signals), email_sent)
     log_scan_run('COT', 'OK', len(all_signals), len(tradeable), note=report_date)
+    # Item 2c: both directions get a signal_log run record on the completed-scan
+    # path, so neither COT_BULL nor COT_BEAR can look dead while the scanner runs.
+    # This sits AFTER the FETCH_FAIL and ALREADY_PROCESSED early returns on purpose
+    # (A6): a scan that fetched nothing must not publish proof of life.
+    log_directional_scan_runs(report_date)
 
     print(f"{'='*60}")
     print(f'COMPLETE: {len(tradeable)} tradeable, {len(blocked)} blocked')
